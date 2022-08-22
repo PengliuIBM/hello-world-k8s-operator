@@ -1,0 +1,197 @@
+source of blog within link:
+https://innablr.com.au/blog/automating-operational-task-with-kubernetes-operators-part-1/
+
+Automating operational tasks with Kubernetes operator - Part 1
+By Prateek Nayak and Chuning Song on Oct 5, 2021
+In the recent years there has been a spike in Kubernetes adoption, especially by enterprises. As this trend continues, more and more organisations are going to be using Kubernetes to build internal platform and provide an abstraction layer which allows development teams / app teams to focus on real customer value through feature delivery.
+
+Out of the box, Kubernetes has a lot of good features like namespaces, RBAC, configMaps, networkPolicies, services and deployments that can be leveraged by platform teams to provide seamless runtime environments for application teams. But still, internal operational procedures tend to become a blocker for end-to-end automation be it db backup before deployment, ad group creation with namespace, updating DNS record when deploying new app or provisioning cloud hosted database like RDS / Spanner.
+
+Introducing Kubernetes Operators aka Operator pattern
+An operator represents human operational knowledge in form of software extensions that allows easy and reliable maintenance of applications i.e, an operator is codified operational knowledge or tasks. In simple terms, an operator allows us to extend Kubernetes with our custom logic which can be executed in response to particular events.
+
+So, lets say as an ops engineer you have solid understanding of the tasks that need to be performed to manage an application. And if these tasks are repetitive in nature and you know that after each deployment of your application to Kubernetes you have to
+
+perform action1 -> action2 -> action3 or
+provision / update an external resource like AWS SQS / RDS / Spanner/ GCP PubSub / Grafana Dashboard / New Relic config etc.
+You can leverage the operator and codify these steps such that they are automagically performed after your deployment event.
+
+Why extension of kubernetes?
+The code for our operational tasks can be written as a custom controller and deployed to Kubernetes just as any other application. This controller then subscribes to the desired events on our custom resource. And when the user performs any action on our custom resource, the informer machinery in Kubernetes invokes our custom controller. This way of extending Kubernetes API allows the operator to be decoupled from the development and release lifecycle of Kubernetes itself and still respond to Kubernetes events.
+
+To understand how the operator works, let’s dig into the core components of an operator.
+
+Custom Resource Definitions (CRDs)
+Custom resource definitions allow us to extend the Kubernetes API and define custom resources in addition to native Kubernetes resources. When we declare a custom resource called foo, we are extending the Kubernetes resources with foo. So, in addition to pods, deployments, services you now have another resource called foo. And you can use kubectl to interact with this new resource like kubectl get foo. To create this CRD and extend the API, we need to provide Kubernetes with a definition of our CRD. An example HelloWorld CRD is shown below
+
+  ---
+  apiVersion: apiextensions.k8s.io/v1
+  kind: CustomResourceDefinition
+  metadata:
+    annotations:
+      controller-gen.kubebuilder.io/version: v0.4.1
+    creationTimestamp: null
+    name: helloworlds.operator.innablr.com.au
+  spec:
+    group: operator.innablr.com.au
+    names:
+      kind: HelloWorld
+      listKind: HelloWorldList
+      plural: helloworlds
+      singular: helloworld
+    scope: Namespaced
+    versions:
+    - name: v1
+      schema:
+        openAPIV3Schema:
+          description: HelloWorld is the Schema for the helloworlds API
+          properties:
+            apiVersion:
+              description: 'APIVersion defines the versioned schema of this representation
+                of an object. Servers should convert recognized schemas to the latest
+                internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+              type: string
+            kind:
+              description: 'Kind is a string value representing the REST resource this
+                object represents. Servers may infer this from the endpoint the client
+                submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: HelloWorldSpec defines the desired state of HelloWorld
+              properties:
+                foo:
+                  description: Foo is an example field of HelloWorld. Edit helloworld_types.go
+                    to remove/update
+                  type: string
+              type: object
+            status:
+              description: HelloWorldStatus defines the observed state of HelloWorld
+              type: object
+          type: object
+      served: true
+      storage: true
+      subresources:
+        status: {}
+  status:
+    acceptedNames:
+      kind: ""
+      plural: ""
+    conditions: []
+    storedVersions: []
+
+We will go through a detailed example in later parts of this series and learn how to get this yaml generated. But suffice to say, you are just describing an API spec for your custom resource and deploying it to Kubernetes. Once you have applied the above CRD you can start creating k8s objects for your CRD. Below is a sample object for our HelloWorld CRD
+
+  ---
+  apiVersion: operator.innablr.com.au/v1
+  kind: HelloWorld
+  metadata:
+    name: potato
+  spec:
+    foo: bar
+Which leads us to the question, what happens when you create this potato object? The answer is simple: Nothing… at least not until we look at the second part of an operator known as controller.
+
+Custom Controllers or Controller
+Before we jump into Custom controllers we need to understand what is the role of controllers in Kubernetes. All Kubernetes resources, like pods, services, deployments are tracked by individual controllers, i.e. one for each resource. These controllers are control loops that are constantly trying to reconcile the state of the cluster to the desired state which is defined by the Kubernetes manifests.
+
+For instance, when you create a resource of type serviceaccount Kubernetes informs all the listeners that have subscribed to the addition event on resource type serviceaccount. And as a result, the SeriveAccountController’s add function gets invoked. For details on how that works Check out the source for ServiceAccountController
+
+Custom controllers are just controllers for custom resources. And they work exactly as Kubernetes controllers, listening for events on the custom resources and whenever Kubernetes detects a change ( add / update /delete ) on the custom resource this custom controller will be invoked. Let’s take a look at some sample code for our HelloWorld operator
+
+
+  func (r *HelloWorldReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+    
+    _ = log.FromContext(ctx)
+    
+    # your logic goes here
+    
+    return ctrl.Result{}, nil
+
+  }
+On any change event to objects of our custom resource helloWorld, Kubernetes will invoke this reconcile method of our custom controller where we can perform any actions as long as we have the appropriate permissions and privileges.
+
+With the theoretical aspects of the operator pattern out of the way, let’s take a look at a quick demo and later in the series, we will go through building something meaningful.
+
+Demo time
+To follow along, you can clone the hello world operator from Innablr’s github repository and from the root of the repository, execute the steps below:
+
+Install the CRD on the cluster
+
+  $ make install
+
+  # this will install the CRD on the cluster and should output something like below
+  customresourcedefinition.apiextensions.k8s.io/helloworlds.operator.innablr.com.au created
+
+Deploy the operator to the cluster. The docker image for this operator is published to Innablr’s public container registry on Github packages. You should be able to deploy it anywhere as long as you can access ghcr.io
+
+  $ make deploy
+
+  # this deploy all the Kubernetes resource for operator, should look something like below
+  namespace/hello-world-k8s-operator-system created
+  customresourcedefinition.apiextensions.k8s.io/helloworlds.operator.innablr.com.au configured
+  serviceaccount/hello-world-k8s-operator-controller-manager created
+  role.rbac.authorization.k8s.io/hello-world-k8s-operator-leader-election-role created
+  clusterrole.rbac.authorization.k8s.io/hello-world-k8s-operator-manager-role created
+  clusterrole.rbac.authorization.k8s.io/hello-world-k8s-operator-metrics-reader created
+  clusterrole.rbac.authorization.k8s.io/hello-world-k8s-operator-proxy-role created
+  rolebinding.rbac.authorization.k8s.io/hello-world-k8s-operator-leader-election-rolebinding created
+  clusterrolebinding.rbac.authorization.k8s.io/hello-world-k8s-operator-manager-rolebinding created
+  clusterrolebinding.rbac.authorization.k8s.io/hello-world-k8s-operator-proxy-rolebinding created
+  configmap/hello-world-k8s-operator-manager-config created
+  service/hello-world-k8s-operator-controller-manager-metrics-service created
+  deployment.apps/hello-world-k8s-operator-controller-manager created
+
+Tail the controller logs ( I use stern - a multi-pod log tailing utility )
+  
+  $ stern -n hello-world-k8s-operator-system hello-world
+
+  # this should start showing controller logs
+Apply an object of our custom resource
+
+  $ k apply -f config/samples/operator_v1_helloworld.yaml
+  
+  # this should apply the object helloworld-sample object as below
+  helloworld.operator.innablr.com.au/helloworld-sample created
+
+You will notice the following log lines appear in your stern output
+
+
+  hello-world-k8s-operator-controller-manager-577bbd6947-q2gq6 manager 2021-09-10T09:46:49.376Z	INFO	controller	hello world! - first Kubernetes operator
+  hello-world-k8s-operator-controller-manager-577bbd6947-q2gq6 manager 2021-09-10T09:46:49.376Z	INFO	controller	this should be fired every time there is a new CRD or update to a crd
+
+This is because I have added few lines of code to our controller that produce some logs. The function now looks like
+
+
+  func (r *HelloWorldReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+    _ = log.FromContext(ctx)
+
+    ctrlLog.Info("hello world! - first Kubernetes operator")
+    ctrlLog.Info("this should be fired every time there is a new CRD or update to a crd")
+
+    return ctrl.Result{}, nil
+  }
+
+Go ahead and add more objects or delete the existing object. You will see those two log lines appear for each action on objects of our HelloWorld custom resource. In this example, we chose to output some logs but, you can write any logic that addresses your use case. For instance, you can interact with AWS / GCP APIs to provision a cloud-managed database or call an external observability provider and deploy a dashboard. There are endless possibilities to what you can do with the operator pattern in your Kubernetes environment.
+
+Word of caution: It is essential to know when to use the operator pattern and when not to use it. Generally, if there are repetitive and idempotent actions, then these are good candidates for an operator. For instance, if deploying your app involves updating the cloud provider DNS or taking a snapshot of your DB before deployment etc then these are good candidates for an operator. YMMV
+
+In later posts of this series, we will look at creating our very own operator which interacts with a cloud provider API to create IAM role and bind that role to our Kubernetes cluster.
+
+Conclusion
+As the development and operation of software continues to be revolutionised by containers and serverless computing, cloud native platforms such as Kubernetes are increasingly being deployed across organisations. While Kubernetes has proven to be the technology winner, it is still a new technology that has yet to enjoy the same level of deployment as other mission critical solutions organisations are familiar with. More advanced organisations are beginning to deploy platforms using Kubernetes and are looking for experienced partners to productise and scale.
+
+Easy deployment of a minimal Kubernetes environment has been facilitated by the major cloud vendors however, simply deploying and running containerised applications is only the beginning. Operator pattern allows organisation to build abstractions on top of Kubernetes and offer a seamless platform experience. By codifying operational tasks that generally require human intervention or change in the context of execution, cluster administrators can enable a higher degree of automation whilst delivering enhanced developer experience.
+
+A complete and integrated Kubernetes platform that encompasses CI/CD, security scanning, networking, storage, and monitoring based upon the stateless and repeatable processes inherent in cloud computing is still a significant project for most organisations that simply do not have the skills and experience to undertake.
+
+Innablr is a Kubernetes Certified Service Provider and leading consultancy for cloud native, Kubernetes, and serverless technologies. Frequently championing community events, delivering thought leadership and leading practices, Innablr is recognised in the Australian market as one of the most experienced providers of Kubernetes solutions.
+
+Continuing our successful approach of building repeatable and extensible frameworks, Innablr has built a blueprint for Google Cloud and Amazon Web Services Kubernetes deployment whether it is Google Kubernetes Engine (GKE) or Elastic Kubernetes Service (EKS).
+
+To learn more about how we’ve been helping businesses innovate with Kubernetes, see our Kubernetes Certified Solution Provider page.
+
+Chuning Song, Engineer @ Innablr
+
+Prateek Nayak, CTO @ Innablr
+
